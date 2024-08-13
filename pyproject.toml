@@ -1,0 +1,11 @@
+[project]
+name = "glorb"
+version = "0.0.1"
+dependencies = [
+    "click",
+    "PyYAML",
+    "requests"
+]
+
+[project.scripts]
+glorb = "glorb.main:cli"

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import click
 import yaml
-import shutil
-import zipfile
-from abc import ABC, abstractmethod
 import os
 import hashlib
 from typing import *
+
+from .source import Source
+from .updatable_source import UpdatableSource
+from .dir_source import DirSource
 
 
 if not os.path.isfile("glorb.yaml"):
@@ -43,22 +44,25 @@ def read_glorbfile():
     uid_source_map = {}
 
     try:
-        with open("glorbfile", "r") as f:
-            for line in f.readlines():
-                split_index = line.index(" ")
-                uid = line[:split_index]
-                source = line[split_index + 1:-1]
-                uid_source_map[uid] = source
+        with open("glorbfile.yaml", "rb") as f:
+            data = yaml.safe_load(f.read())
+
+            if data is None:
+                return {}
+
+            for entry in data:
+                uid_source_map[entry["uid"]] = entry["source"]
     except FileNotFoundError:
         return {}
 
     return uid_source_map
 
 
-def write_glorbfile(segment_source_map: Dict[str, str]):
-    with open("glorbfile", "w") as f:
-        for segment, source in segment_source_map.items():
-            f.write(segment + " " + source + "\n")
+def write_glorbfile(uid_source_map: Dict[str, str]):
+    with open("glorbfile.yaml", "w") as f:
+        data = [{"uid": uid, "source": source} for uid, source in uid_source_map.items()]
+
+        yaml.safe_dump(data, f)
 
 
 uid_source_map = read_glorbfile()
@@ -73,107 +77,17 @@ def hash_file(path: str, chunk_size: int = 8192):
     return h
 
 
-class Source(ABC):
-    @staticmethod
-    @abstractmethod
-    def from_dict(v: Dict) -> Source:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def pull(self, to_path: str, segment: str):
-        raise NotImplementedError()
-
-    @abstractmethod
-    def push(self, from_path: str, segment: str):
-        raise NotImplementedError()
-
-    @abstractmethod
-    def has_entry(self, segment: str) -> bool:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def remove(self, segment: str) -> None:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def get_modification_time(self, segment: str) -> float:
-        raise NotImplementedError()
-
-
-class ZipSource(Source):
-    DATA_ROOT = "data/"
-
-    def __init__(self, path: str):
-        self.zipfile = zipfile.ZipFile(path, "a")
-
-    # def fetch(self, relative_path: str, to_path: str):
-        # self.zipfile.extract(from_path, os.path.join(ZipSource.DATA_ROOT, relative_path))
-
-    def push(self, from_path: str, relative_path: str):
-        self.zipfile.write(from_path, os.path.join(ZipSource.DATA_ROOT, relative_path))
-
-
-class DirSource(Source):
-    def __init__(self, root: str):
-        self.root: str = root
-        self.data_root: str = os.path.join(root, "data/")
-        # self.hashes_path: str = os.path.join(root, "glorbhash")
-        # self.hashes: Dict[str, str] = self.read_hashes()
-        os.makedirs(self.data_root, exist_ok=True)
-
-    @staticmethod
-    def from_dict(v: Dict) -> DirSource:
-        return DirSource(v["path"])
-
-    # def read_hashes(self) -> Dict[str, str]:
-    #     if not os.path.exists(self.hashes_path):
-    #         return {}
-    #
-    #     hashes = {}
-    #
-    #     with open(self.hashes_path, "r") as f:
-    #         for line in f.readlines():
-    #             split_index = line.index(" ")
-    #             h = line[:split_index]
-    #             uid = line[split_index + 1:-1]
-    #             hashes[uid] = h
-    #
-    #     return hashes
-    #
-    # def write_hashes(self):
-    #     with open(self.hashes_path, "w") as f:
-    #         for uid, h in self.hashes.items():
-    #             f.write(h + " " + uid + "\n")
-
-    def pull(self, to_path: str, segment: str):
-        source_path = self.segment_to_path(segment)
-        shutil.copy(source_path, to_path)
-        os.utime(to_path, (0, os.path.getmtime(source_path)))
-
-    def push(self, from_path: str, segment: str):
-        source_path = self.segment_to_path(segment)
-
-        os.makedirs(os.path.dirname(source_path), exist_ok=True)
-
-        shutil.copy(from_path, source_path)
-        os.utime(source_path, (0, os.path.getmtime(from_path)))
-
-        # self.hashes[segment_to_uid(segment)] = hash_file(from_path).hexdigest()
-        # self.write_hashes()
-
-    def segment_to_path(self, segment: str) -> str:
-        return os.path.join(self.data_root, segment)
-
-    def has_entry(self, segment: str) -> bool:
-        return os.path.exists(self.segment_to_path(segment))
-
-    def remove(self, segment: str):
-        os.remove(self.segment_to_path(segment))
-        # del self.hashes[segment_to_uid(segment)]
-        # self.write_hashes()
-
-    def get_modification_time(self, segment: str) -> float:
-        return os.path.getmtime(self.segment_to_path(segment))
+# class ZipSource(Source):
+#     DATA_ROOT = "data/"
+#
+#     def __init__(self, path: str):
+#         self.zipfile = zipfile.ZipFile(path, "a")
+#
+#     # def fetch(self, relative_path: str, to_path: str):
+#         # self.zipfile.extract(from_path, os.path.join(ZipSource.DATA_ROOT, relative_path))
+#
+#     def push(self, from_path: str, relative_path: str):
+#         self.zipfile.write(from_path, os.path.join(ZipSource.DATA_ROOT, relative_path))
 
 
 def segment_to_uid(segment: str) -> str:
@@ -222,6 +136,7 @@ def get_source(source_name: str) -> Source:
 @cli.command()
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.argument("source_name")
+# @click.option("--segment-override", type=str)
 def add(path, source_name):
     source = get_source(source_name)
 
@@ -231,8 +146,9 @@ def add(path, source_name):
     if uid in uid_source_map.keys():
         print(f"File {path} already tracked in source {uid_source_map[uid]}.")
         exit(1)
-    
-    source.push(path, segment)
+
+    if isinstance(source, UpdatableSource):
+        source.push(path, segment)
 
     uid_source_map[segment] = source_name
 
@@ -251,7 +167,8 @@ def untrack(path: str):
     source_name = try_get(uid_source_map, uid, f"File {path} not tracked.")
     source = get_source(source_name)
 
-    source.remove(segment)
+    if isinstance(source, UpdatableSource):
+        source.remove(segment)
 
     del uid_source_map[segment]
 
@@ -272,7 +189,7 @@ def pull(path, force):
     source = get_source(source_name)
 
     if (os.path.exists(path)
-            and os.path.getmtime(path) > source.get_modification_time(segment)
+            and source.compare_modification_time(segment, os.path.getmtime(path)) == -1
             and not force):
         prompt_confirm("The file to pull to has a later modification date than the source file. Are you sure you want to overwrite it? (y/n)\n")
 
@@ -289,7 +206,11 @@ def push(path, force):
     source_name = try_get(uid_source_map, uid, f"File {path} not tracked.")
     source = get_source(source_name)
 
-    if source.get_modification_time(segment) > os.path.getmtime(path) and not force:
+    if not isinstance(source, UpdatableSource):
+        print(f"File {path} is stored in source type {config['sources'][source_name]['type']}, which does not support pushing.")
+        exit(1)
+
+    if source.compare_modification_time(segment, os.path.getmtime(path)) == 1 and not force:
         prompt_confirm("The source file has a later modification date than the file to push. Are you sure you want to overwrite it? (y/n)\n")
 
     source.push(path, segment)
@@ -301,13 +222,14 @@ def sync():
         path = os.path.join(os.getcwd(), uid)
         source = get_source(source_name)
 
-        source_modification_time = source.get_modification_time(uid)
-        local_modification_time = os.path.getmtime(path)
+        comparison = source.compare_modification_time(uid, os.path.getmtime(path))
 
-        if source_modification_time > local_modification_time:  # source newer
+        if comparison == 1:  # source newer
             source.pull(path, uid)
-        elif local_modification_time > source_modification_time:  # local newer
+            print(f"PULLED \"{uid}\"")
+        elif comparison == -1 and isinstance(source, UpdatableSource):  # local newer
             source.push(path, uid)
+            print(f"PUSHED \"{uid}\"")
 
 
 if __name__ == '__main__':
