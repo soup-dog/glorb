@@ -286,10 +286,22 @@ def push(path, force):
 
 
 @cli.command
-def sync():
+@click.option("--skip-sources", type=str, default="")
+@click.option("--skip-types", type=str, default="")
+def sync(skip_sources: str, skip_types: str):
+    sources_to_skip = skip_sources.split(",")
+    types_to_skip = skip_types.split(",")
+
     for uid, entry in uid_entry_map.items():
         path = os.path.join(os.getcwd(), uid)
+
+        if entry.source_name in sources_to_skip:
+            continue
+
         source = get_source(entry.source_name)
+
+        if config["sources"][entry.source_name]["type"] in types_to_skip:
+            continue
 
         comparison = source.compare_modification_time(uid, os.path.getmtime(path))
 

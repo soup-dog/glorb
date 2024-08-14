@@ -25,7 +25,7 @@ class URLSource(Source):
         download_file(self.base + segment, to_path)
 
     def compare_modification_time(self, segment: str, local_modification_time: float) -> int:
-        return 1
+        return 1  # source always newer
 
     def maybe_has_entry(self, segment: str) -> Union[bool, None]:
         return None
