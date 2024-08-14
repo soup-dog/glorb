@@ -73,7 +73,12 @@ class DirSource(UpdatableSource):
         return os.path.getmtime(self.segment_to_path(segment))
 
     def compare_modification_time(self, segment: str, local_modification_time: float) -> int:
-        source_modification_time = self.get_modification_time(segment)
+        path = self.segment_to_path(segment)
+
+        if not os.path.isfile(path):
+            return -1
+
+        source_modification_time = os.path.getmtime(path)
 
         if source_modification_time > local_modification_time:
             return 1

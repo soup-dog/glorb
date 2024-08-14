@@ -11,7 +11,6 @@ from .updatable_source import UpdatableSource
 from .dir_source import DirSource
 from .url_source import URLSource
 
-
 """
 Terminology:
     Segment: Path from the project or source root.
@@ -23,7 +22,6 @@ Terminology:
         These are not necessarily the same format and cannot be directly compared!
 """
 
-
 if not os.path.isfile("glorb.yaml"):
     print(f"Could not find glorb.yaml in {os.getcwd()}.")
     exit(1)
@@ -32,8 +30,27 @@ with open("glorb.yaml", "rb") as f:
     config = yaml.safe_load(f.read())
 
 
-has_git = os.path.isdir(".git")
+def merge_dicts(a: Dict, b: Dict) -> Dict:
+    merged = {**a}
 
+    for k in b:
+        if k in a and isinstance(a[k], dict) and isinstance(b[k], dict):
+            merged[k] = merge_dicts(a[k], b[k])
+        else:
+            merged[k] = b[k]
+
+    return merged
+
+
+try:
+    with open("glorboverrides.yaml", "rb") as f:
+        config_overrides = yaml.safe_load(f.read())
+
+    config = merge_dicts(config, config_overrides)
+except FileNotFoundError:
+    pass
+
+has_git = os.path.isdir(".git")
 
 GITIGNORE_MESSAGE = \
     """# +---------------------------------------------------------------------------------+
@@ -187,10 +204,6 @@ def get_path_uid(path: str):
     return os.path.join(os.getcwd(), uid), uid
 
 
-# def get_entry(entries: Dict[str, GlorbEntry], path: str) -> GlorbEntry:
-#
-
-
 @cli.command()
 @click.argument("path", type=click.Path(dir_okay=False))
 @click.argument("source_name")
@@ -255,7 +268,8 @@ def pull(path, force):
     if (os.path.exists(path)
             and source.compare_modification_time(source_segment, os.path.getmtime(path)) == -1
             and not force):
-        prompt_confirm("The file to pull to has a later modification date than the source file. Are you sure you want to overwrite it? (y/n)\n")
+        prompt_confirm(
+            "The file to pull to has a later modification date than the source file. Are you sure you want to overwrite it? (y/n)\n")
 
     source.pull(path, local_uid)
 
@@ -280,7 +294,8 @@ def push(path, force):
         exit(1)
 
     if source.compare_modification_time(source_segment, os.path.getmtime(path)) == 1 and not force:
-        prompt_confirm("The source file has a later modification date than the file to push. Are you sure you want to overwrite it? (y/n)\n")
+        prompt_confirm(
+            "The source file has a later modification date than the file to push. Are you sure you want to overwrite it? (y/n)\n")
 
     source.push(path, source_segment)
 
@@ -303,13 +318,15 @@ def sync(skip_sources: str, skip_types: str):
         if config["sources"][entry.source_name]["type"] in types_to_skip:
             continue
 
-        comparison = source.compare_modification_time(uid, os.path.getmtime(path))
+        source_segment = entry.source_segment
+
+        comparison = source.compare_modification_time(source_segment, os.path.getmtime(path))
 
         if comparison == 1:  # source newer
-            source.pull(path, uid)
+            source.pull(path, source_segment)
             print(f"PULLED \"{uid}\"")
         elif comparison == -1 and isinstance(source, UpdatableSource):  # local newer
-            source.push(path, uid)
+            source.push(path, source_segment)
             print(f"PUSHED \"{uid}\"")
 
 
