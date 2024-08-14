@@ -9,6 +9,19 @@ from typing import *
 from .source import Source
 from .updatable_source import UpdatableSource
 from .dir_source import DirSource
+from .url_source import URLSource
+
+
+"""
+Terminology:
+    Segment: Path from the project or source root.
+        Local: Path from the project root.
+        Source: Path or reference from the source root.
+    UID: 
+        Local: Unique identifier for a particular project file.
+        Source: Unique identifier for a particular source entry.
+        These are not necessarily the same format and cannot be directly compared!
+"""
 
 
 if not os.path.isfile("glorb.yaml"):
@@ -40,8 +53,30 @@ def write_gitignore(segments: List[str]):
         f.write(GITIGNORE_MESSAGE)
 
 
-def read_glorbfile():
-    uid_source_map = {}
+class GlorbEntry:
+    def __init__(self, uid: str, source_name: str, segment_override: str = None):
+        self.uid: str = uid
+        self.source_name: str = source_name
+        self.segment_override: str = segment_override
+
+    @property
+    def source_segment(self):
+        return self.uid if self.segment_override is None else self.segment_override
+
+    @staticmethod
+    def from_dict(v: Dict) -> GlorbEntry:
+        return GlorbEntry(**v)
+
+    def to_dict(self) -> Dict:
+        return {
+            "uid": self.uid,
+            "source_name": self.source_name,
+            "segment_override": self.segment_override,
+        }
+
+
+def read_glorbfile() -> Dict[str, GlorbEntry]:
+    uid_entry_map = {}
 
     try:
         with open("glorbfile.yaml", "rb") as f:
@@ -51,21 +86,21 @@ def read_glorbfile():
                 return {}
 
             for entry in data:
-                uid_source_map[entry["uid"]] = entry["source"]
+                uid_entry_map[entry["uid"]] = GlorbEntry.from_dict(entry)
     except FileNotFoundError:
         return {}
 
-    return uid_source_map
+    return uid_entry_map
 
 
-def write_glorbfile(uid_source_map: Dict[str, str]):
+def write_glorbfile(uid_entry_map: Dict[str, GlorbEntry]) -> None:
     with open("glorbfile.yaml", "w") as f:
-        data = [{"uid": uid, "source": source} for uid, source in uid_source_map.items()]
+        data = [entry.to_dict() for entry in uid_entry_map.values()]
 
         yaml.safe_dump(data, f)
 
 
-uid_source_map = read_glorbfile()
+uid_entry_map = read_glorbfile()
 
 
 def hash_file(path: str, chunk_size: int = 8192):
@@ -99,7 +134,10 @@ def cli():
     pass
 
 
-def try_get(d: Dict, key: str, message: str = "", exit_code: int = 1) -> Any:
+T = TypeVar("T")
+
+
+def try_get(d: Dict[str, T], key: str, message: str = "", exit_code: int = 1) -> T:
     try:
         return d[key]
     except KeyError:
@@ -107,7 +145,7 @@ def try_get(d: Dict, key: str, message: str = "", exit_code: int = 1) -> Any:
         exit(exit_code)
 
 
-def try_get_default(d: Dict, key: Dict, default: Any) -> Any:
+def try_get_default(d: Dict[str, T], key: str, default: T) -> T:
     try:
         return d[key]
     except KeyError:
@@ -124,103 +162,134 @@ def prompt_confirm(message: str = "Are you sure you want to do that? (y/n)\n"):
             exit(1)
 
 
+name_source_map = {
+    "dir": DirSource,
+    "url": URLSource,
+}
+
+
 def get_source(source_name: str) -> Source:
     sources = try_get(config, "sources", "Missing entry \"sources\".")
     source_dict = try_get(sources, source_name, f"No source with name {source_name}")
-    type_ = try_get({"dir": DirSource}, source_dict["type"],
+    type_ = try_get(name_source_map, source_dict["type"],
                     f"Unrecognised source type {source_dict['type']}.")
 
     return type_.from_dict(source_dict)
 
 
+def get_segment_uid(path: str):
+    segment = os.path.relpath(path, os.getcwd())
+    return segment, segment_to_uid(segment)
+
+
+def get_path_uid(path: str):
+    _, uid = get_segment_uid(path)
+    return os.path.join(os.getcwd(), uid), uid
+
+
+# def get_entry(entries: Dict[str, GlorbEntry], path: str) -> GlorbEntry:
+#
+
+
 @cli.command()
-@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("path", type=click.Path(dir_okay=False))
 @click.argument("source_name")
-# @click.option("--segment-override", type=str)
-def add(path, source_name):
+@click.option("--segment-override", type=str, default=None)
+def add(path, source_name, segment_override):
     source = get_source(source_name)
 
-    segment = os.path.relpath(path, os.getcwd())
-    uid = segment_to_uid(segment)
+    path, uid = get_path_uid(path)
+    source_segment = uid if segment_override is None else uid
 
-    if uid in uid_source_map.keys():
-        print(f"File {path} already tracked in source {uid_source_map[uid]}.")
+    if uid in uid_entry_map:
+        print(f"File {path} already tracked in source {uid_entry_map[uid].source_name}.")
         exit(1)
 
-    if isinstance(source, UpdatableSource):
-        source.push(path, segment)
+    if os.path.exists(path):
+        if isinstance(source, UpdatableSource):
+            source.push(path, source_segment)
+    else:
+        if source.maybe_has_entry(source_segment):
+            source.pull(path, source_segment)
 
-    uid_source_map[segment] = source_name
+    uid_entry_map[uid] = GlorbEntry(uid, source_name, segment_override)
 
-    write_glorbfile(uid_source_map)
+    write_glorbfile(uid_entry_map)
 
     if has_git:
-        write_gitignore(list(uid_source_map.keys()))
+        write_gitignore(list(uid_entry_map.keys()))
 
 
 @cli.command()
 @click.argument("path", type=click.Path())
 def untrack(path: str):
-    segment = os.path.relpath(path, os.getcwd())
-    uid = segment_to_uid(segment)
+    # segment = os.path.relpath(path, os.getcwd())
+    # uid = segment_to_uid(segment)
 
-    source_name = try_get(uid_source_map, uid, f"File {path} not tracked.")
+    path, uid = get_path_uid(path)
+
+    source_name = try_get(uid_entry_map, uid, f"File {path} not tracked.").source_name
     source = get_source(source_name)
 
     if isinstance(source, UpdatableSource):
-        source.remove(segment)
+        source.remove(uid)
 
-    del uid_source_map[segment]
+    del uid_entry_map[uid]
 
-    write_glorbfile(uid_source_map)
+    write_glorbfile(uid_entry_map)
 
     if has_git:
-        write_gitignore(list(uid_source_map.keys()))
+        write_gitignore(list(uid_entry_map.keys()))
 
 
 @cli.command()
 @click.argument("path", type=click.Path(dir_okay=False))
 @click.option("--force/--no-force", type=bool, default=False)
 def pull(path, force):
-    segment = os.path.relpath(path, os.getcwd())
-    uid = segment_to_uid(segment)
+    path, local_uid = get_path_uid(path)
+    entry = try_get(uid_entry_map, local_uid, f"File {path} not tracked.")
+    source_segment = entry.source_segment
 
-    source_name = try_get(uid_source_map, uid, f"File {path} not tracked.")
-    source = get_source(source_name)
+    source = get_source(entry.source_name)
 
     if (os.path.exists(path)
-            and source.compare_modification_time(segment, os.path.getmtime(path)) == -1
+            and source.compare_modification_time(source_segment, os.path.getmtime(path)) == -1
             and not force):
         prompt_confirm("The file to pull to has a later modification date than the source file. Are you sure you want to overwrite it? (y/n)\n")
 
-    source.pull(path, segment)
+    source.pull(path, local_uid)
 
 
 @cli.command()
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--force/--no-force", type=bool, default=False)
 def push(path, force):
-    segment = os.path.relpath(path, os.getcwd())
-    uid = segment_to_uid(segment)
+    # _, uid = get_segment_uid(path)
+    #
+    # source_name = try_get(uid_entry_map, uid, f"File {path} not tracked.").source_name
+    # source = get_source(source_name)
 
-    source_name = try_get(uid_source_map, uid, f"File {path} not tracked.")
-    source = get_source(source_name)
+    path, local_uid = get_path_uid(path)
+    entry = try_get(uid_entry_map, local_uid, f"File {path} not tracked.")
+    source_segment = entry.source_segment
+
+    source = get_source(entry.source_name)
 
     if not isinstance(source, UpdatableSource):
-        print(f"File {path} is stored in source type {config['sources'][source_name]['type']}, which does not support pushing.")
+        print(f"File {path} is stored in source type {type(source)}, which does not support pushing.")
         exit(1)
 
-    if source.compare_modification_time(segment, os.path.getmtime(path)) == 1 and not force:
+    if source.compare_modification_time(source_segment, os.path.getmtime(path)) == 1 and not force:
         prompt_confirm("The source file has a later modification date than the file to push. Are you sure you want to overwrite it? (y/n)\n")
 
-    source.push(path, segment)
+    source.push(path, source_segment)
 
 
 @cli.command
 def sync():
-    for uid, source_name in uid_source_map.items():
+    for uid, entry in uid_entry_map.items():
         path = os.path.join(os.getcwd(), uid)
-        source = get_source(source_name)
+        source = get_source(entry.source_name)
 
         comparison = source.compare_modification_time(uid, os.path.getmtime(path))
 

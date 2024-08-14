@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Union
 import requests
 import shutil
 
@@ -27,5 +27,8 @@ class URLSource(Source):
     def compare_modification_time(self, segment: str, local_modification_time: float) -> int:
         return 1
 
+    def maybe_has_entry(self, segment: str) -> Union[bool, None]:
+        return None
+
     def has_entry(self, segment: str) -> bool:
-        pass
+        raise NotImplementedError()

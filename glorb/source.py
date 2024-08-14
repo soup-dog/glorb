@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, Union
 
 
 class Source(ABC):
@@ -16,6 +16,10 @@ class Source(ABC):
 
     @abstractmethod
     def has_entry(self, segment: str) -> bool:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def maybe_has_entry(self, segment: str) -> Union[bool, None]:
         raise NotImplementedError()
 
     # @abstractmethod

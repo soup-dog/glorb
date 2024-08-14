@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import Dict
+from typing import Dict, Union
 
 from .updatable_source import UpdatableSource
 
@@ -60,6 +60,9 @@ class DirSource(UpdatableSource):
 
     def has_entry(self, segment: str) -> bool:
         return os.path.exists(self.segment_to_path(segment))
+
+    def maybe_has_entry(self, segment: str) -> Union[bool, None]:
+        return self.has_entry(segment)
 
     def remove(self, segment: str):
         os.remove(self.segment_to_path(segment))
